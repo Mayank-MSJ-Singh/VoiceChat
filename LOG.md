@@ -60,4 +60,33 @@
 - Emotion parser correctly extracts `[happy]` from tagged text ✅
 - Emotion parser falls back to `neutral` for untagged text ✅
 
-**Next step:** User test — run `main.py` with LM Studio running to have a text conversation with Maya
+**Next step:** User test — run `test_stt.py` to verify mic → text works
+
+---
+
+## 2026-03-13 — Phase 2: Speech-to-Text Built
+
+### Dependencies Installed
+
+- `torch 2.10.0+cu128` (CUDA enabled ✅)
+- `torchaudio`
+- `faster-whisper`
+- `sounddevice` (31 audio devices detected, default: Realtek Microphone Array)
+- `numpy`
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `core/audio_listener.py` | Continuous mic capture via `sounddevice` callback → pushes float32 mono chunks to `audio_queue` |
+| `core/speech_to_text.py` | Dual-mode speech detection (Silero VAD or simple amplitude) + Faster-Whisper transcription |
+| `test_stt.py` | Standalone test script: speak into mic → see transcribed text in console |
+
+### Design
+
+- **VAD mode (default)**: Silero VAD detects speech start/end → 0.8s silence timeout → transcribe
+- **Simple mode (fallback)**: Amplitude threshold → 1.5s silence timeout → transcribe
+- Switch via `config.USE_VAD = False`
+- Whisper runs on GPU (CUDA), can be moved to CPU via `config.WHISPER_DEVICE = "cpu"`
+
+**Next step:** User test — run `test_stt.py` to verify mic → text works
