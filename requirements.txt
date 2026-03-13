@@ -1,0 +1,17 @@
+# ============================================================
+# Maya AI Voice Companion — Dependencies
+# ============================================================
+
+# Phase 1: Text chat
+requests
+
+# Phase 2: Speech-to-text (uncomment when ready)
+# faster-whisper
+# silero-vad
+# torch
+# torchaudio
+# sounddevice
+# numpy
+
+# Phase 3: Text-to-speech (uncomment when ready)
+# TTS
