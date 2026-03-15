@@ -41,6 +41,15 @@ VOICE_SAMPLES = {
 }
 DEFAULT_EMOTION = "neutral"
 
+# --- Emotion Volume ---
+# Volume multiplier per emotion (1.0 = normal)
+EMOTION_VOLUME = {
+    "neutral": 1.0,
+    "happy": 1.3,
+    "soft": 0.6,
+    "teasing": 1.2,
+}
+
 # --- Thinking Delay ---
 THINKING_DELAY_MIN = 1.0  # seconds
 THINKING_DELAY_MAX = 2.0  # seconds
@@ -48,3 +57,6 @@ THINKING_DELAY_MAX = 2.0  # seconds
 # --- Paths ---
 PERSONALITY_PROMPT_PATH = "prompts/personality.txt"
 CACHE_DIR = "cache"
+
+# --- Background Music ---
+BGM_VOLUME = 0.15  # Very low (0.0 - 1.0) — it's ambient background

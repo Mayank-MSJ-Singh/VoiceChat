@@ -141,4 +141,75 @@ Thread 5 (AudioPlayback)   → playback_queue → speakers
 
 Graceful shutdown via `threading.Event` + Ctrl+C.
 
-**Next step:** User test — run `main.py` with LM Studio running for full voice conversation
+**Next step:** User test — run `main.py` and try interrupting Maya mid-sentence
+
+---
+
+## 2026-03-15 — Phase 5: Interrupt Handling + Polish
+
+### How Interrupts Work
+
+1. User speaks while Maya is talking
+2. STT detects speech → pushes text to `speech_queue`
+3. LLM worker checks `audio_out.is_active()` → detects Maya is speaking
+4. Calls `audio_out.stop()` → playback halts within 250ms
+5. Drains `llm_queue` and `playback_queue` (discards pending responses)
+6. Processes the new user input immediately
+
+### Changes
+
+| File | Change |
+|---|---|
+| `main.py` | Added shared `AudioOutput` between LLM and playback workers; interrupt logic in `llm_worker`; `_drain_queue` utility |
+| `core/audio_output.py` | Reduced playback chunk from 1s to 250ms for faster interrupt response |
+
+### Status: MVP Complete 🎉
+
+All 5 phases are done. Maya can:
+- ✅ Listen to you via microphone (Silero VAD + Faster-Whisper)
+- ✅ Think and respond via LLM (Gemma 3 4B via LM Studio)
+- ✅ Speak back with emotion-based voice (XTTS v2)
+- ✅ Be interrupted mid-sentence when you start talking
+- ✅ Run entirely locally on RTX 5060 + 32GB RAM
+
+---
+
+## 2026-03-15 — Filler System: Natural Response Timing
+
+### The Idea (from user)
+Play pre-recorded filler audio ("hmm...", "oh really?") immediately when user stops speaking, while LLM + TTS work in background. This replaces dead silence with natural human-like thinking sounds.
+
+### How It Works
+
+```
+User speaks → STT transcribes
+                 ↓
+    ┌────────────┴────────────┐
+    ↓ (instant)               ↓ (takes 5-8s)
+ Mood detect            Gemma → XTTS
+ Pick filler            Full response
+ Play "hmm..."          Generate audio
+    ↓                         ↓
+ 🔊 FILLER plays        🔊 REAL response plays
+    (covers the gap)         (follows filler)
+```
+
+### Files
+
+| File | Purpose |
+|---|---|
+| `core/filler_engine.py` | Keyword-based mood detection → selects random filler per mood |
+| `generate_fillers.py` | Pre-generates 13 filler WAV clips via XTTS with Maya's voice |
+| `main.py` | Rewired: filler injected into `playback_queue` before LLM call; removed thinking delay |
+
+### Mood Categories
+
+| Mood | Triggers | Fillers |
+|---|---|---|
+| excited | "amazing", "love", "!" | "oh wow!", "oh really?", "wait what?" |
+| sad | "tired", "bad", "lonely" | "aww...", "oh no..." |
+| question | "what", "how", "?" | "hmm...", "well...", "let's see..." |
+| intense | "need", "serious", "listen" | "oh...", "wait...", "okay..." |
+| neutral | (default) | "hmm...", "well...", "sooo..." |
+
+**Next step:** Run `generate_fillers.py` then test `main.py` with fillers

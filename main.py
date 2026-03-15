@@ -5,6 +5,11 @@
 #   Mic → STT → LLM → TTS → Speaker
 # All components run as threads communicating via queues.
 #
+# Features:
+#   - Interrupt handling: Maya stops talking when you speak
+#   - Graceful shutdown via Ctrl+C
+#   - Text-only mode via --text flag
+#
 # Usage:
 #   python main.py          → Voice mode (full pipeline)
 #   python main.py --text   → Text-only mode (CLI chat)
@@ -12,14 +17,13 @@
 
 import sys
 import time
-import random
 import threading
 import queue
 
 import config
 from core.llm_engine import LLMEngine
 from core.emotion_engine import parse_emotion
-from core.thinking_delay import think
+from core.filler_engine import FillerEngine
 from utils import logger
 from utils import queues
 
@@ -27,10 +31,11 @@ from utils import queues
 # ============================================================
 # Worker: LLM conversation (Thread 3)
 # ============================================================
-def llm_worker(llm: LLMEngine, speech_queue: queue.Queue, stop_event: threading.Event):
+def llm_worker(llm: LLMEngine, speech_queue: queue.Queue, filler, audio_out, stop_event: threading.Event):
     """
     Reads transcribed text from speech_queue,
-    sends to Gemma, pushes response to llm_queue.
+    immediately plays a filler while Gemma + TTS work,
+    then pushes LLM response for TTS synthesis.
     """
     logger.success("LLM", "Worker ready — waiting for speech input")
 
@@ -40,12 +45,21 @@ def llm_worker(llm: LLMEngine, speech_queue: queue.Queue, stop_event: threading.
         except queue.Empty:
             continue
 
+        # --- INTERRUPT: If Maya is currently speaking, stop her ---
+        if audio_out.is_active():
+            logger.info("INTERRUPT", "User spoke — interrupting Maya!")
+            audio_out.stop()
+            _drain_queue(queues.llm_queue)
+            _drain_queue(queues.playback_queue)
+
         logger.chat_user(user_text)
 
-        # Simulate human thinking time
-        think()
+        # --- FILLER: Play immediately while LLM thinks ---
+        filler_path = filler.get_filler(user_text) if filler else None
+        if filler_path:
+            queues.playback_queue.put((filler_path, 0.8))  # Fillers slightly quieter
 
-        # Get response from Gemma
+        # Get response from Gemma (filler plays during this time!)
         raw_reply = llm.chat(user_text)
 
         # Parse emotion and clean text
@@ -78,29 +92,40 @@ def tts_worker(stop_event: threading.Event):
 
         wav_path = tts.synthesize(text, emotion)
         if wav_path:
-            queues.playback_queue.put(wav_path)
+            volume = config.EMOTION_VOLUME.get(emotion, 1.0)
+            queues.playback_queue.put((wav_path, volume))
 
 
 # ============================================================
 # Worker: Audio playback (Thread 5)
 # ============================================================
-def playback_worker(stop_event: threading.Event):
+def playback_worker(audio_out, stop_event: threading.Event):
     """
     Reads audio file paths from playback_queue,
     plays them through speakers.
+    Uses shared audio_out for interrupt support.
     """
-    from core.audio_output import AudioOutput
-
-    audio = AudioOutput()
     logger.success("PLAY", "Worker ready")
 
     while not stop_event.is_set():
         try:
-            wav_path = queues.playback_queue.get(timeout=0.5)
+            wav_path, volume = queues.playback_queue.get(timeout=0.5)
         except queue.Empty:
             continue
 
-        audio.play(wav_path)
+        audio_out.play(wav_path, volume=volume)
+
+
+# ============================================================
+# Utility: Drain a queue
+# ============================================================
+def _drain_queue(q: queue.Queue):
+    """Remove all items from a queue without blocking."""
+    while True:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            break
 
 
 # ============================================================
@@ -110,13 +135,15 @@ def run_voice_pipeline():
     """
     Run the full real-time voice pipeline.
     All 5 worker threads communicate via queues.
+    Interrupt: user speech during playback stops Maya and processes new input.
     """
     print()
     print("=" * 55)
     print("  🎙️  Maya — AI Voice Companion")
     print("=" * 55)
     print("  Speak naturally into your microphone.")
-    print("  Maya will listen, think, and respond with voice.")
+    print("  Maya will listen, think, and respond.")
+    print("  Interrupt her anytime by speaking!")
     print("  Press Ctrl+C to stop.")
     print("=" * 55)
     print()
@@ -132,10 +159,24 @@ def run_voice_pipeline():
     # Import audio components
     from core.audio_listener import AudioListener
     from core.speech_to_text import SpeechToText
+    from core.audio_output import AudioOutput
+    from core.bgm_player import BGMPlayer
+
+    # Shared audio output (for interrupt coordination)
+    audio_out = AudioOutput()
+
+    # Filler engine (instant mood-based fillers while TTS works)
+    filler = FillerEngine()
+
+    # Background music (loops continuously at low volume)
+    bgm = BGMPlayer()
 
     # Initialize STT components
     listener = AudioListener(queues.audio_queue)
     stt = SpeechToText(queues.audio_queue, queues.speech_queue)
+
+    # ---- Start BGM first (runs independently) ----
+    bgm.start()
 
     # ---- Start all worker threads ----
     threads = []
@@ -148,9 +189,9 @@ def run_voice_pipeline():
     t2 = threading.Thread(target=stt.start, name="SpeechToText", daemon=True)
     threads.append(t2)
 
-    # Thread 3: LLM conversation
+    # Thread 3: LLM conversation (with filler + interrupt support)
     t3 = threading.Thread(
-        target=llm_worker, args=(llm, queues.speech_queue, stop_event),
+        target=llm_worker, args=(llm, queues.speech_queue, filler, audio_out, stop_event),
         name="LLMConversation", daemon=True,
     )
     threads.append(t3)
@@ -162,9 +203,9 @@ def run_voice_pipeline():
     )
     threads.append(t4)
 
-    # Thread 5: Audio playback
+    # Thread 5: Audio playback (with shared audio_out)
     t5 = threading.Thread(
-        target=playback_worker, args=(stop_event,),
+        target=playback_worker, args=(audio_out, stop_event),
         name="AudioPlayback", daemon=True,
     )
     threads.append(t5)
@@ -186,9 +227,11 @@ def run_voice_pipeline():
         print("\n")
         logger.info("Main", "Shutting down...")
         stop_event.set()
+        bgm.stop()
         listener.stop()
         stt.stop()
-        time.sleep(1)  # Give threads a moment to finish
+        audio_out.stop()
+        time.sleep(1)
         logger.success("Main", "Goodbye! 👋")
 
 
@@ -196,10 +239,7 @@ def run_voice_pipeline():
 # Text Mode: CLI Chat (Phase 1 preserved)
 # ============================================================
 def run_text_chat():
-    """
-    Text-only chat mode (no audio).
-    Type messages, get conversational replies.
-    """
+    """Text-only chat mode (no audio). Type messages, get replies."""
     print()
     print("=" * 55)
     print("  🎙️  Maya — AI Voice Companion (Text Mode)")
@@ -227,8 +267,7 @@ def run_text_chat():
                 print("\nMaya: [soft] Byeee... talk to you later, okay?\n")
                 break
 
-            delay = random.uniform(config.THINKING_DELAY_MIN, config.THINKING_DELAY_MAX)
-            time.sleep(delay)
+            time.sleep(config.THINKING_DELAY_MIN)
 
             raw_reply = llm.chat(user_input)
             clean_text, emotion = parse_emotion(raw_reply)
