@@ -89,4 +89,26 @@
 - Switch via `config.USE_VAD = False`
 - Whisper runs on GPU (CUDA), can be moved to CPU via `config.WHISPER_DEVICE = "cpu"`
 
-**Next step:** User test — run `test_stt.py` to verify mic → text works
+**Next step:** User test — run `generate_voice_sample.py` then `test_tts.py`
+
+---
+
+## 2026-03-13 — Phase 3: Text-to-Speech Built
+
+### Dependency Issues Resolved
+
+- `pip install TTS` failed (requires Python < 3.13)
+- User found `coqui-tts` (community fork, Python 3.13 compatible) ✅
+- Had to pin `transformers<5` (v5 broke coqui-tts imports)
+- Had to install `coqui-tts[codec]` (torchcodec required by PyTorch 2.9+)
+
+### Files Created
+
+| File | Purpose |
+|---|---|
+| `core/tts_engine.py` | XTTS v2 synthesis with emotion-based voice selection + multi-level fallback |
+| `core/audio_output.py` | WAV playback via sounddevice with chunked output for interruption support |
+| `generate_voice_sample.py` | Creates initial voice reference samples using built-in TTS model |
+| `test_tts.py` | Test script: type text with `[emotion]` tag → hear Maya speak |
+
+**Next step:** User test — run `generate_voice_sample.py` then `test_tts.py`
