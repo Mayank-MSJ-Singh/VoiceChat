@@ -111,4 +111,34 @@
 | `generate_voice_sample.py` | Creates initial voice reference samples using built-in TTS model |
 | `test_tts.py` | Test script: type text with `[emotion]` tag → hear Maya speak |
 
-**Next step:** User test — run `generate_voice_sample.py` then `test_tts.py`
+**Next step:** User test — run `main.py` for full voice pipeline
+
+---
+
+## 2026-03-15 — Phase 3 TTS Fixed & Phase 4: Full Pipeline Built
+
+### Phase 3 Resolution
+- User fixed torchcodec/FFmpeg issue independently
+- `test_tts.py` confirmed working ✅
+
+### Phase 4 Files Created
+
+| File | Purpose |
+|---|---|
+| `utils/queues.py` | 5 shared queues: `audio_queue`, `speech_queue`, `llm_queue` (carries text+emotion tuples), `playback_queue` |
+| `core/thinking_delay.py` | Random 1-2s pause before response |
+| `main.py` (rewritten) | Full pipeline with 5 worker threads + `--text` flag for CLI mode |
+
+### Pipeline Architecture
+
+```
+Thread 1 (AudioCapture)    → mic → audio_queue
+Thread 2 (SpeechToText)    → audio_queue → speech_queue
+Thread 3 (LLMConversation) → speech_queue → llm_queue
+Thread 4 (TTSSynthesis)    → llm_queue → playback_queue
+Thread 5 (AudioPlayback)   → playback_queue → speakers
+```
+
+Graceful shutdown via `threading.Event` + Ctrl+C.
+
+**Next step:** User test — run `main.py` with LM Studio running for full voice conversation
