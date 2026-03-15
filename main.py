@@ -29,13 +29,16 @@ from utils import queues
 
 
 # ============================================================
-# Worker: LLM conversation (Thread 3)
+# Worker: LLM conversation — streaming (Thread 3)
 # ============================================================
 def llm_worker(llm: LLMEngine, speech_queue: queue.Queue, filler, audio_out, stop_event: threading.Event):
     """
-    Reads transcribed text from speech_queue,
-    immediately plays a filler while Gemma + TTS work,
-    then pushes LLM response for TTS synthesis.
+    Reads transcribed text from speech_queue.
+    Streams LLM response sentence by sentence:
+      - Filler plays immediately
+      - First sentence → parse emotion → TTS
+      - Each subsequent sentence → TTS (same emotion)
+      - Playback thread plays them in order
     """
     logger.success("LLM", "Worker ready — waiting for speech input")
 
@@ -54,21 +57,32 @@ def llm_worker(llm: LLMEngine, speech_queue: queue.Queue, filler, audio_out, sto
 
         logger.chat_user(user_text)
 
-        # --- FILLER: Play immediately while LLM thinks ---
+        # --- FILLER: Play immediately while LLM starts ---
         filler_path = filler.get_filler(user_text) if filler else None
         if filler_path:
-            queues.playback_queue.put((filler_path, 0.8))  # Fillers slightly quieter
+            queues.playback_queue.put((filler_path, 0.8))
 
-        # Get response from Gemma (filler plays during this time!)
-        raw_reply = llm.chat(user_text)
+        # --- STREAM: Send each sentence to TTS as it's generated ---
+        emotion = "neutral"
+        is_first = True
 
-        # Parse emotion and clean text
-        clean_text, emotion = parse_emotion(raw_reply)
+        for sentence in llm.chat_stream(user_text):
+            if stop_event.is_set():
+                break
 
-        logger.chat_maya(clean_text, emotion)
+            # Parse emotion from the first sentence (tag is at the start)
+            if is_first:
+                clean_text, emotion = parse_emotion(sentence)
+                is_first = False
+            else:
+                clean_text = sentence
 
-        # Push to TTS queue
-        queues.llm_queue.put((clean_text, emotion))
+            if clean_text.strip():
+                logger.chat_maya(clean_text, emotion)
+
+                # Push each sentence to TTS independently
+                volume = config.EMOTION_VOLUME.get(emotion, 1.0)
+                queues.llm_queue.put((clean_text, emotion, volume))
 
 
 # ============================================================
@@ -86,13 +100,12 @@ def tts_worker(stop_event: threading.Event):
 
     while not stop_event.is_set():
         try:
-            text, emotion = queues.llm_queue.get(timeout=0.5)
+            text, emotion, volume = queues.llm_queue.get(timeout=0.5)
         except queue.Empty:
             continue
 
         wav_path = tts.synthesize(text, emotion)
         if wav_path:
-            volume = config.EMOTION_VOLUME.get(emotion, 1.0)
             queues.playback_queue.put((wav_path, volume))
 
 

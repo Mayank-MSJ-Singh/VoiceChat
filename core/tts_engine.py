@@ -101,8 +101,9 @@ class TTSEngine:
         # Get voice sample for this emotion
         voice_path = self._get_voice_path(emotion)
 
-        # Output path
-        output_path = os.path.join(self.cache_dir, "response.wav")
+        # Output path — unique per synthesis to avoid overwrites during streaming
+        import time
+        output_path = os.path.join(self.cache_dir, f"tts_{int(time.time()*1000)}.wav")
 
         logger.info("TTS", f"Generating speech [{emotion}]: \"{text[:50]}...\"" if len(text) > 50 else f"Generating speech [{emotion}]: \"{text}\"")
 
