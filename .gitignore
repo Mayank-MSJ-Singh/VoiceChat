@@ -3,3 +3,5 @@
 venv
 
 .env
+
+Qwen2.5-Omni-7B-Q4_K_M.gguf
